@@ -1,0 +1,254 @@
+import requests
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+from datetime import datetime, timedelta
+import json
+import time
+
+class F1EnhancedCarbonTracker:
+    """
+    Enhanced F1 Carbon Tracker with real API data integration
+    Uses external APIs for more accurate emissions calculations
+    """
+    
+    def __init__(self):
+        self.base_tracker = None  # Will be initialized with main tracker
+        
+        # API endpoints and keys (replace with actual keys)
+        self.api_config = {
+            'ergast_f1_api': 'http://ergast.com/api/f1',  # Free F1 API
+            'carbon_interface_api': 'https://api.carboninterface.com/v1',  # Carbon calculations
+            'openweather_api': 'https://api.openweathermap.org/data/2.5',  # Weather data
+            'aviation_api': 'https://aviation-edge.com/v2/public',  # Flight data
+        }
+        
+        # Headers for APIs (add your API keys here)
+        self.headers = {
+            'carbon_interface': {
+                'Authorization': 'Bearer YOUR_CARBON_INTERFACE_KEY',
+                'Content-Type': 'application/json'
+            }
+        }
+    
+    def fetch_f1_race_schedule(self, year=2024):
+        """Fetch real F1 race schedule from Ergast API"""
+        try:
+            url = f"{self.api_config['ergast_f1_api']}/{year}.json"
+            response = requests.get(url)
+            
+            if response.status_code == 200:
+                data = response.json()
+                races = data['MRData']['RaceTable']['Races']
+                
+                race_data = []
+                for race in races:
+                    race_info = {
+                        'round': race['round'],
+                        'race_name': race['raceName'],
+                        'circuit': race['Circuit']['circuitName'],
+                        'location': race['Circuit']['Location']['locality'],
+                        'country': race['Circuit']['Location']['country'],
+                        'date': race['date'],
+                        'latitude': float(race['Circuit']['Location']['lat']),
+                        'longitude': float(race['Circuit']['Location']['long'])
+                    }
+                    race_data.append(race_info)
+                
+                return pd.DataFrame(race_data)
+            else:
+                print(f"Failed to fetch F1 schedule: {response.status_code}")
+                return None
+                
+        except Exception as e:
+            print(f"Error fetching F1 schedule: {e}")
+            return None
+    
+    def calculate_distance_between_circuits(self, df):
+        """Calculate distances between consecutive race locations"""
+        from math import radians, cos, sin, asin, sqrt
+        
+        def haversine(lon1, lat1, lon2, lat2):
+            """Calculate the great circle distance between two points on Earth"""
+            lon1, lat1, lon2, lat2 = map(radians, [lon1, lat1, lon2, lat2])
+            dlon = lon2 - lon1 
+            dlat = lat2 - lat1 
+            a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+            c = 2 * asin(sqrt(a)) 
+            r = 6371  # Radius of earth in kilometers
+            return c * r
+        
+        distances = [0]  # First race has no previous distance
+        
+        for i in range(1, len(df)):
+            prev_lat = df.iloc[i-1]['latitude']
+            prev_lon = df.iloc[i-1]['longitude']
+            curr_lat = df.iloc[i]['latitude']
+            curr_lon = df.iloc[i]['longitude']
+            
+            distance = haversine(prev_lon, prev_lat, curr_lon, curr_lat)
+            distances.append(distance)
+        
+        df['distance_from_previous'] = distances
+        return df
+    
+    def fetch_carbon_data_from_api(self, activity_type, parameters):
+        """Fetch carbon emission data using Carbon Interface API"""
+        try:
+            # This is a mock implementation - replace with actual API call
+            # Real implementation would require valid API key
+            
+            mock_responses = {
+                'flight': {'co2_kg': parameters.get('distance', 0) * 0.255},
+                'shipping': {'co2_kg': parameters.get('weight', 0) * parameters.get('distance', 0) * 0.015 / 1000},
+                'electricity': {'co2_kg': parameters.get('kwh', 0) * 0.5}
+            }
+            
+            return mock_responses.get(activity_type, {'co2_kg': 0})
+            
+        except Exception as e:
+            print(f"Error fetching carbon data: {e}")
+            return {'co2_kg': 0}
+    
+    def get_weather_impact_on_emissions(self, location, date):
+        """Analyze how weather conditions affect race weekend emissions"""
+        try:
+            # Mock weather impact calculation
+            # In real implementation, you'd call OpenWeatherMap API
+            weather_factors = {
+                'temperature_extreme': 1.15,  # Hot/cold weather increases cooling/heating needs
+                'rain': 1.08,  # Rain increases logistical complexity
+                'normal': 1.0
+            }
+            
+            # Simplified weather impact (replace with real API call)
+            import random
+            weather_condition = random.choice(['normal', 'temperature_extreme', 'rain'])
+            return weather_factors[weather_condition]
+            
+        except Exception as e:
+            print(f"Error fetching weather data: {e}")
+            return 1.0
+    
+    def enhanced_emissions_calculation(self, race_df):
+        """Enhanced emissions calculation using real data"""
+        results = []
+        
+        for _, race in race_df.iterrows():
+            # Base calculations (similar to main tracker)
+            base_emissions = self.calculate_base_emissions(race)
+            
+            # Weather impact
+            weather_factor = self.get_weather_impact_on_emissions(
+                race['location'], race['date']
+            )
+            
+            # Enhanced freight calculations using API
+            freight_params = {
+                'weight': 150000,  # Total freight weight in kg
+                'distance': race['distance_from_previous']
+            }
+            
+            api_freight_data = self.fetch_carbon_data_from_api('shipping', freight_params)
+            
+            # Combine calculations
+            enhanced_emissions = {
+                'race': race['race_name'],
+                'location': race['location'],
+                'date': race['date'],
+                'base_emissions': base_emissions,
+                'weather_adjusted': base_emissions * weather_factor,
+                'api_freight_emissions': api_freight_data['co2_kg'],
+                'total_enhanced': base_emissions * weather_factor + api_freight_data['co2_kg']
+            }
+            
+            results.append(enhanced_emissions)
+        
+        return pd.DataFrame(results)
+    
+    def calculate_base_emissions(self, race_data):
+        """Simplified base emissions calculation"""
+        # Simplified calculation for demonstration
+        distance = race_data.get('distance_from_previous', 0)
+        base_per_km = 50  # kg CO2 per km (simplified)
+        circuit_base = 500000  # kg CO2 base per race
+        
+        return (distance * base_per_km) + circuit_base
+    
+    def real_time_carbon_dashboard(self, enhanced_data):
+        """Create real-time carbon dashboard with API data"""
+        
+        # Create dashboard with multiple metrics
+        fig = go.Figure()
+        
+        # Add traces for different emission sources
+        fig.add_trace(go.Scatter(
+            x=enhanced_data['date'],
+            y=enhanced_data['total_enhanced'] / 1000,
+            mode='lines+markers',
+            name='Total Enhanced Emissions',
+            line=dict(color='red', width=3)
+        ))
+        
+        fig.add_trace(go.Scatter(
+            x=enhanced_data['date'],
+            y=enhanced_data['weather_adjusted'] / 1000,
+            mode='lines+markers',
+            name='Weather Adjusted Base',
+            line=dict(color='blue', width=2)
+        ))
+        
+        fig.add_trace(go.Scatter(
+            x=enhanced_data['date'],
+            y=enhanced_data['api_freight_emissions'] / 1000,
+            mode='lines+markers',
+            name='API Freight Emissions',
+            line=dict(color='green', width=2)
+        ))
+        
+        fig.update_layout(
+            title='F1 Real-Time Carbon Emissions Dashboard',
+            xaxis_title='Race Date',
+            yaxis_title='CO2 Emissions (tonnes)',
+            height=600,
+            showlegend=True
+        )
+        
+        return fig
+    
+    def carbon_offset_calculator(self, total_emissions):
+        """Calculate carbon offset requirements and costs"""
+        
+        offset_options = {
+            'forest_restoration': {
+                'cost_per_tonne': 15,  # USD per tonne CO2
+                'description': 'Forest restoration projects',
+                'timeframe': '20-30 years',
+                'co_benefits': ['Biodiversity', 'Water conservation', 'Local jobs']
+            },
+            'renewable_energy': {
+                'cost_per_tonne': 25,
+                'description': 'Renewable energy infrastructure',
+                'timeframe': '1-5 years',
+                'co_benefits': ['Clean energy access', 'Grid stability']
+            },
+            'direct_air_capture': {
+                'cost_per_tonne': 400,
+                'description': 'Direct air capture technology',
+                'timeframe': 'Immediate',
+                'co_benefits': ['Permanent storage', 'Technology advancement']
+            }
+        }
+        
+        total_tonnes = total_emissions / 1000
+        
+        print(f"\n💰 Carbon Offset Calculator")
+        print(f"Total emissions to offset: {total_tonnes:.1f} tonnes CO2")
+        print("=" * 50)
+        
+        for option, details in offset_options.items():
+            cost = total_tonnes * details['cost_per_tonne']
+            print(f"\n{option.replace('_', ' ').title()}:")
+            print(f"  • Cost: ${cost:,.0f}")
+            print(f"  • Description: {details['description']}")
+            print(f"  • Timeframe: {details['timeframe']}")
